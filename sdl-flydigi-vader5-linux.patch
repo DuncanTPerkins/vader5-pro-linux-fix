@@ -1,0 +1,111 @@
+diff --git a/src/joystick/hidapi/SDL_hidapi_flydigi.c b/src/joystick/hidapi/SDL_hidapi_flydigi.c
+index a4958f6..0000000 100644
+--- a/src/joystick/hidapi/SDL_hidapi_flydigi.c
++++ b/src/joystick/hidapi/SDL_hidapi_flydigi.c
+@@ -78,6 +78,7 @@ enum
+ #define FLYDIGI_V2_SET_STATUS_COMMAND   0x11
+ #define FLYDIGI_V2_HAPTIC_COMMAND       0x12
+ #define FLYDIGI_V2_ACQUIRE_CONTROLLER_COMMAND 0x1C
++#define FLYDIGI_V2_RAW_PACKET_SIZE 32
+ #define FLYDIGI_V2_INPUT_REPORT         0xEF
+ 
+ typedef struct
+@@ -358,6 +359,32 @@ static bool HIDAPI_DriverFlydigi_InitControllerV1(SDL_HIDAPI_Device *device)
+     return true;
+ }
+ 
++static bool SDL_HIDAPI_Flydigi_UsesUnnumbered32ByteReports(SDL_HIDAPI_Device *device)
++{
++    return device->vendor_id == USB_VENDOR_FLYDIGI_V2 && device->interface_number == 1;
++}
++
++static int SDL_HIDAPI_Flydigi_WritePacket(SDL_HIDAPI_Device *device, const Uint8 *packet, size_t size)
++{
++    if (SDL_HIDAPI_Flydigi_UsesUnnumbered32ByteReports(device)) {
++        Uint8 raw_packet[FLYDIGI_V2_RAW_PACKET_SIZE + 1];
++        size_t payload_size;
++
++        SDL_zeroa(raw_packet);
++
++        // hidapi wants a synthetic 0 report ID for unnumbered reports.
++        if (size > 0 && packet[0] == FLYDIGI_V2_CMD_REPORT_ID) {
++            ++packet;
++            --size;
++        }
++
++        payload_size = SDL_min(size, (size_t)FLYDIGI_V2_RAW_PACKET_SIZE);
++        SDL_memcpy(&raw_packet[1], packet, payload_size);
++        return SDL_hid_write(device->dev, raw_packet, sizeof(raw_packet));
++    }
++
++    return SDL_hid_write(device->dev, packet, size);
++}
++
+ static bool GetReply(SDL_HIDAPI_Device* device, Uint8 command, Uint8* data, size_t length)
+ {
+     for (int i = 0; i < 100; ++i) {
+@@ -374,10 +401,16 @@ static bool GetReply(SDL_HIDAPI_Device* device, Uint8 command, Uint8* data, size
+ #ifdef DEBUG_FLYDIGI_PROTOCOL
+         HIDAPI_DumpPacket("Flydigi packet: size = %d", data, size);
+ #endif
+-
+-        if (size == 32) {
+-            if (data[1] == FLYDIGI_V2_MAGIC1 && data[2] == FLYDIGI_V2_MAGIC2) {
+-                // Skip the report ID
++        if (size >= 32) {
++            if (size > 32 && data[1] == FLYDIGI_V2_MAGIC1 && data[2] == FLYDIGI_V2_MAGIC2) {
++                // hidapi may prefix a synthetic zero report ID for unnumbered replies.
++                SDL_memmove(&data[0], &data[1], size - 1);
++                data[size - 1] = 0;
++                --size;
++            } else if (size == 32 && data[1] == FLYDIGI_V2_MAGIC1 && data[2] == FLYDIGI_V2_MAGIC2) {
++                // Skip the report ID on numbered interfaces.
+                 SDL_memmove(&data[0], &data[1], size - 1);
+                 data[size - 1] = 0;
+             }
+@@ -399,7 +432,7 @@ static bool SDL_HIDAPI_Flydigi_SendInfoRequest(SDL_HIDAPI_Device *device)
+         2,
+         0
+     };
+-    if (SDL_hid_write(device->dev, cmd, sizeof(cmd)) < 0) {
++    if (SDL_HIDAPI_Flydigi_WritePacket(device, cmd, sizeof(cmd)) < 0) {
+         return SDL_SetError("Couldn't query controller info");
+     }
+     return true;
+@@ -441,7 +474,7 @@ static bool SDL_HIDAPI_Flydigi_SendStatusRequest(SDL_HIDAPI_Device *device)
+         FLYDIGI_V2_MAGIC2,
+         FLYDIGI_V2_GET_STATUS_COMMAND
+     };
+-    if (SDL_hid_write(device->dev, cmd, sizeof(cmd)) < 0) {
++    if (SDL_HIDAPI_Flydigi_WritePacket(device, cmd, sizeof(cmd)) < 0) {
+         return SDL_SetError("Couldn't query controller status");
+     }
+     return true;
+@@ -469,7 +502,7 @@ static bool SDL_HIDAPI_Flydigi_SendAcquireRequest(SDL_HIDAPI_Device *device, boo
+         acquire ? 1 : 0,
+         'S', 'D', 'L', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+     };
+-
+-    if (SDL_hid_write(device->dev, cmd, sizeof(cmd)) < 0) {
++
++    if (SDL_HIDAPI_Flydigi_WritePacket(device, cmd, sizeof(cmd)) < 0) {
+         return SDL_SetError("Couldn't send acquire command");
+     }
+     return true;
+@@ -613,7 +646,14 @@ static bool HIDAPI_DriverFlydigi_RumbleJoystick(SDL_HIDAPI_Device *device, SDL_J
+         Uint8 rumble_packet[] = { FLYDIGI_V2_CMD_REPORT_ID, FLYDIGI_V2_MAGIC1, FLYDIGI_V2_MAGIC2, FLYDIGI_V2_HAPTIC_COMMAND, 6, 0, 0, 0, 0, 0 };
+         rumble_packet[5] = low_frequency_rumble >> 8;
+         rumble_packet[6] = high_frequency_rumble >> 8;
+-
+-        if (SDL_HIDAPI_SendRumble(device, rumble_packet, sizeof(rumble_packet)) != sizeof(rumble_packet)) {
++        if (SDL_HIDAPI_Flydigi_UsesUnnumbered32ByteReports(device)) {
++            Uint8 raw_packet[FLYDIGI_V2_RAW_PACKET_SIZE + 1];
++            SDL_zeroa(raw_packet);
++            SDL_memcpy(&raw_packet[1], &rumble_packet[1], sizeof(rumble_packet) - 1);
++            if (SDL_HIDAPI_SendRumble(device, raw_packet, sizeof(raw_packet)) != sizeof(raw_packet)) {
++                return SDL_SetError("Couldn't send rumble packet");
++            }
++        } else if (SDL_HIDAPI_SendRumble(device, rumble_packet, sizeof(rumble_packet)) != sizeof(rumble_packet)) {
+             return SDL_SetError("Couldn't send rumble packet");
+         }
+     }

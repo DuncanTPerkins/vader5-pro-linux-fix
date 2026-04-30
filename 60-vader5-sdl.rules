@@ -1,0 +1,26 @@
+# Flydigi Vader 5 Pro — udev rules for SDL HIDAPI native detection
+#
+# Drop at /etc/udev/rules.d/60-vader5-sdl.rules (overlayfs-backed on SteamOS,
+# survives atomic /usr updates), then reload:
+#
+#     sudo udevadm control --reload-rules
+#     sudo udevadm trigger
+#
+# What this file does:
+#   1. Grant the active session user read access to the Vader hidraw nodes
+#      so Steam's SDL HIDAPI can open the DInput interface (interface 1).
+#   2. Unbind xpad from the XInput interface (interface 0) so Steam sees
+#      only the Flydigi HIDAPI device and not a duplicate generic Xbox pad
+#      alongside it.  SDL HIDAPI reads from interface 1 via hidraw; xpad on
+#      interface 0 is unused and would confuse Steam's device deduplication.
+
+# 1. hidraw access — TAG+="uaccess" grants an ACL to the active session user
+#    via systemd-logind, no manual group membership required.
+KERNEL=="hidraw*", ATTRS{idVendor}=="37d7", ATTRS{idProduct}=="2401", \
+    MODE="0660", GROUP="input", TAG+="uaccess"
+
+# 2. Unbind xpad from interface 0 on connect.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", DRIVER=="xpad", \
+    ATTR{bInterfaceNumber}=="00", \
+    ATTRS{idVendor}=="37d7", ATTRS{idProduct}=="2401", \
+    RUN+="/bin/sh -c 'echo -n %k > /sys/bus/usb/drivers/xpad/unbind'"
