@@ -77,6 +77,12 @@ Inside the namespace, Steam's SDL paths resolve to our patched build. `steamui.s
 
 Everything else — button mapping, paddle state, gyro parsing — is unchanged and already correct for the Vader 5 Pro's payload layout.
 
+### The `SDL_TryLockJoysticks` shim
+
+Steam's `steamui.so` is built against Valve's internal SDL fork, which exports `SDL_TryLockJoysticks@@SDL3_0.0.0`. Upstream SDL 3.4.4 doesn't have that symbol, so swapping in our patched upstream build alone makes `dlmopen steamui.so` fail with `undefined symbol: SDL_TryLockJoysticks`.
+
+The installer builds a tiny shim (`sdl3_shim{32,64}.so`) that implements `SDL_TryLockJoysticks` by calling `SDL_LockJoysticks` (which exists in upstream SDL) and returning `1`. `patchelf --add-needed sdl3_shim.so` wires it into our patched `libSDL3` so the dynamic loader pulls it in automatically. The wrapper bind-mounts the 32-bit and 64-bit shims into `ubuntu12_32/sdl3_shim.so` and `ubuntu12_64/sdl3_shim.so` next to the (already bind-mounted) patched libSDL3, so `RUNPATH=$ORIGIN` finds them. No host file ever changes.
+
 This repo is licensed under MIT. The included patch targets SDL, which is licensed upstream under zlib. If you redistribute patched SDL builds, preserve SDL's upstream notices as required by that project.
 
 ### xpad unbind
@@ -92,6 +98,8 @@ Without the udev rule, `xpad` binds to interface 0 and Steam sees two controller
 
 ~/.local/share/vader5-driver/sdl/libSDL3-32.so.0   # deployed 32-bit SDL
 ~/.local/share/vader5-driver/sdl/libSDL3-64.so.0   # deployed 64-bit SDL
+~/.local/share/vader5-driver/sdl/sdl3_shim32.so    # SDL_TryLockJoysticks shim (32-bit)
+~/.local/share/vader5-driver/sdl/sdl3_shim64.so    # SDL_TryLockJoysticks shim (64-bit)
 ~/.local/share/vader5-driver/wrapper.sh             # bwrap launcher
 
 # One of the following, depending on distro/setup:
@@ -109,17 +117,23 @@ The install script offers to install missing build tools automatically. To insta
 
 **Arch / SteamOS / CachyOS:**
 ```sh
-sudo pacman -S --needed cmake ninja git patch gcc-multilib lib32-glibc lib32-gcc-libs bubblewrap
+sudo pacman -S --needed cmake ninja git patch gcc-multilib lib32-glibc lib32-gcc-libs bubblewrap patchelf
 ```
 
-**Fedora / Bazzite:**
+**Fedora / Bazzite / Nobara:**
 ```sh
-sudo dnf install -y cmake ninja-build git gcc patch glibc-devel.i686 libstdc++-devel.i686 bubblewrap
+sudo dnf install -y cmake ninja-build git gcc patch bubblewrap patchelf \
+    glibc-devel.i686 libstdc++-devel.i686 \
+    libX11-devel.i686 libXext-devel.i686 \
+    libXcursor-devel.i686 libXi-devel.i686 \
+    libXfixes-devel.i686 libXrandr-devel.i686 \
+    libXrender-devel.i686 libXinerama-devel.i686 \
+    libXScrnSaver-devel.i686 libXtst-devel.i686
 ```
 
 **Ubuntu / Debian:**
 ```sh
-sudo apt-get install -y cmake ninja-build git gcc gcc-multilib patch bubblewrap
+sudo apt-get install -y cmake ninja-build git gcc gcc-multilib patch bubblewrap patchelf
 ```
 
 On SteamOS, run `passwd` first if you haven't set a sudo password.

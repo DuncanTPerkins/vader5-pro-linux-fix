@@ -169,48 +169,52 @@ install_deps() {
         pacman)
             for t in "${MISSING_TOOLS[@]}"; do
                 case "$t" in
-                    cmake)   pkgs+=(cmake) ;;
-                    ninja)   pkgs+=(ninja) ;;
-                    git)     pkgs+=(git) ;;
-                    patch)   pkgs+=(patch) ;;
-                    gcc)     pkgs+=(gcc gcc-multilib) ;;
-                    bwrap)   pkgs+=(bubblewrap) ;;
+                    cmake)    pkgs+=(cmake) ;;
+                    ninja)    pkgs+=(ninja) ;;
+                    git)      pkgs+=(git) ;;
+                    patch)    pkgs+=(patch) ;;
+                    gcc)      pkgs+=(gcc gcc-multilib) ;;
+                    bwrap)    pkgs+=(bubblewrap) ;;
+                    patchelf) pkgs+=(patchelf) ;;
                 esac
             done
             ;;
         dnf)
             for t in "${MISSING_TOOLS[@]}"; do
                 case "$t" in
-                    cmake)   pkgs+=(cmake) ;;
-                    ninja)   pkgs+=(ninja-build) ;;
-                    git)     pkgs+=(git) ;;
-                    patch)   pkgs+=(patch) ;;
-                    gcc)     pkgs+=(gcc glibc-devel.i686 libstdc++-devel.i686) ;;
-                    bwrap)   pkgs+=(bubblewrap) ;;
+                    cmake)    pkgs+=(cmake) ;;
+                    ninja)    pkgs+=(ninja-build) ;;
+                    git)      pkgs+=(git) ;;
+                    patch)    pkgs+=(patch) ;;
+                    gcc)      pkgs+=(gcc glibc-devel.i686 libstdc++-devel.i686) ;;
+                    bwrap)    pkgs+=(bubblewrap) ;;
+                    patchelf) pkgs+=(patchelf) ;;
                 esac
             done
             ;;
         apt)
             for t in "${MISSING_TOOLS[@]}"; do
                 case "$t" in
-                    cmake)   pkgs+=(cmake) ;;
-                    ninja)   pkgs+=(ninja-build) ;;
-                    git)     pkgs+=(git) ;;
-                    patch)   pkgs+=(patch) ;;
-                    gcc)     pkgs+=(gcc gcc-multilib) ;;
-                    bwrap)   pkgs+=(bubblewrap) ;;
+                    cmake)    pkgs+=(cmake) ;;
+                    ninja)    pkgs+=(ninja-build) ;;
+                    git)      pkgs+=(git) ;;
+                    patch)    pkgs+=(patch) ;;
+                    gcc)      pkgs+=(gcc gcc-multilib) ;;
+                    bwrap)    pkgs+=(bubblewrap) ;;
+                    patchelf) pkgs+=(patchelf) ;;
                 esac
             done
             ;;
         zypper)
             for t in "${MISSING_TOOLS[@]}"; do
                 case "$t" in
-                    cmake)   pkgs+=(cmake) ;;
-                    ninja)   pkgs+=(ninja) ;;
-                    git)     pkgs+=(git) ;;
-                    patch)   pkgs+=(patch) ;;
-                    gcc)     pkgs+=(gcc gcc-32bit) ;;
-                    bwrap)   pkgs+=(bubblewrap) ;;
+                    cmake)    pkgs+=(cmake) ;;
+                    ninja)    pkgs+=(ninja) ;;
+                    git)      pkgs+=(git) ;;
+                    patch)    pkgs+=(patch) ;;
+                    gcc)      pkgs+=(gcc gcc-32bit) ;;
+                    bwrap)    pkgs+=(bubblewrap) ;;
+                    patchelf) pkgs+=(patchelf) ;;
                 esac
             done
             ;;
@@ -233,10 +237,24 @@ install_x11_32() {
 
     case "$PKG_MANAGER" in
         pacman)  $PKG_INSTALL lib32-libx11 lib32-libxext lib32-glibc lib32-gcc-libs ;;
-        dnf)     $PKG_INSTALL libX11-devel.i686 libXext-devel.i686 glibc-devel.i686 ;;
+        dnf)     # Fedora / Bazzite / Nobara — SDL's 32-bit cmake probe pulls
+                 # in the full X11 i686 dev surface, not just libX11/libXext.
+                 # Reported by RavioliAM (issue #2) on Nobara 43.
+                 $PKG_INSTALL \
+                     glibc-devel.i686 libstdc++-devel.i686 \
+                     libX11-devel.i686 libXext-devel.i686 \
+                     libXcursor-devel.i686 libXi-devel.i686 \
+                     libXfixes-devel.i686 libXrandr-devel.i686 \
+                     libXrender-devel.i686 libXinerama-devel.i686 \
+                     libXScrnSaver-devel.i686 libXtst-devel.i686 ;;
         apt)     sudo dpkg --add-architecture i386 2>/dev/null || true
                  sudo apt-get update -qq
-                 $PKG_INSTALL libx11-dev:i386 libxext-dev:i386 ;;
+                 $PKG_INSTALL \
+                     libx11-dev:i386 libxext-dev:i386 \
+                     libxcursor-dev:i386 libxi-dev:i386 \
+                     libxfixes-dev:i386 libxrandr-dev:i386 \
+                     libxrender-dev:i386 libxinerama-dev:i386 \
+                     libxss-dev:i386 libxtst-dev:i386 ;;
         zypper)  $PKG_INSTALL libX11-devel-32bit ;;
     esac
 
@@ -360,6 +378,7 @@ check_tool ninja
 check_tool git
 check_tool bwrap
 check_tool patch
+check_tool patchelf
 
 install_deps
 
@@ -486,6 +505,70 @@ strip --strip-unneeded "$SDL_DEPLOY_DIR/libSDL3-32.so.0" 2>/dev/null || true
 
 ok "SDL deployed"
 
+# ── 5b. SDL_TryLockJoysticks shim ─────────────────────────────────────────────
+# Steam's `steamui.so` requires `SDL_TryLockJoysticks@@SDL3_0.0.0`, a symbol
+# Valve's internal SDL fork exports but upstream SDL 3.4.4 does not. Without
+# it, dlmopen of steamui.so fails before the client UI ever appears.
+#
+# Reported by RavioliAM (issue #2) on Nobara 43. We build a tiny shim that
+# implements the symbol via SDL_LockJoysticks (which IS in upstream SDL),
+# patchelf it onto our libSDL3 as NEEDED, and bind-mount it next to libSDL3
+# inside the bwrap namespace so RUNPATH=$ORIGIN finds it at load time.
+info "Building SDL_TryLockJoysticks shim"
+
+SHIM_BUILD="$(mktemp -d)"
+trap 'rm -rf "$SHIM_BUILD"' EXIT
+
+cat > "$SHIM_BUILD/sdl3_shim.c" <<'SHIM_C_EOF'
+/* Shim providing SDL_TryLockJoysticks for Steam clients built against
+ * Valve's internal SDL fork. Upstream SDL 3.4.4 does not export this
+ * symbol, so steamui.so fails to load against an unmodified upstream SDL.
+ *
+ * Implementation: forward to SDL_LockJoysticks (always succeeds → return 1).
+ */
+extern void SDL_LockJoysticks(void);
+
+int SDL_TryLockJoysticks(void)
+{
+    SDL_LockJoysticks();
+    return 1;
+}
+SHIM_C_EOF
+
+cat > "$SHIM_BUILD/sdl3_shim.map" <<'SHIM_MAP_EOF'
+SDL3_0.0.0 {
+    global: SDL_TryLockJoysticks;
+    local: *;
+};
+SHIM_MAP_EOF
+
+_build_shim() {
+    local bits="$1" out="$2" sdl_lib="$3"
+    gcc -shared -fPIC -m"$bits" \
+        -Wl,--version-script="$SHIM_BUILD/sdl3_shim.map" \
+        -Wl,-soname,sdl3_shim.so \
+        -o "$out" "$SHIM_BUILD/sdl3_shim.c" \
+        -L"$SDL_DEPLOY_DIR" \
+        -Wl,-rpath,"$SDL_DEPLOY_DIR" \
+        -l:"$(basename "$sdl_lib")" \
+        || { err "$bits-bit shim build failed"; exit 1; }
+}
+
+_build_shim 64 "$SDL_DEPLOY_DIR/sdl3_shim64.so" "$SDL_DEPLOY_DIR/libSDL3-64.so.0"
+_build_shim 32 "$SDL_DEPLOY_DIR/sdl3_shim32.so" "$SDL_DEPLOY_DIR/libSDL3-32.so.0"
+
+# Make patched libSDL3 pull in the shim. patchelf is a no-op if the entry is
+# already there, so the install script stays idempotent.
+for _arch in 32 64; do
+    _lib="$SDL_DEPLOY_DIR/libSDL3-${_arch}.so.0"
+    if ! patchelf --print-needed "$_lib" 2>/dev/null | grep -qx 'sdl3_shim.so'; then
+        patchelf --add-needed sdl3_shim.so "$_lib" \
+            || { err "patchelf failed on $_lib"; exit 1; }
+    fi
+done
+
+ok "SDL_TryLockJoysticks shim built and wired"
+
 # ── 6. Deploy bwrap wrapper ───────────────────────────────────────────────────
 info "Deploying bwrap wrapper"
 mkdir -p "$DEPLOY_DIR"
@@ -494,8 +577,12 @@ cat > "$WRAPPER_DST" <<'WRAPPER_EOF'
 #!/bin/bash
 SDL32="$HOME/.local/share/vader5-driver/sdl/libSDL3-32.so.0"
 SDL64="$HOME/.local/share/vader5-driver/sdl/libSDL3-64.so.0"
+SHIM32="$HOME/.local/share/vader5-driver/sdl/sdl3_shim32.so"
+SHIM64="$HOME/.local/share/vader5-driver/sdl/sdl3_shim64.so"
 STEAM32="$HOME/.local/share/Steam/ubuntu12_32/libSDL3.so.0"
 STEAM64="$HOME/.local/share/Steam/ubuntu12_64/libSDL3.so.0"
+STEAM_SHIM32="$HOME/.local/share/Steam/ubuntu12_32/sdl3_shim.so"
+STEAM_SHIM64="$HOME/.local/share/Steam/ubuntu12_64/sdl3_shim.so"
 STEAM_LAUNCHER="@@STEAM_LAUNCHER@@"
 
 BWRAP="$(command -v bwrap 2>/dev/null)"
@@ -509,9 +596,9 @@ if [[ ! -x "$STEAM_LAUNCHER" ]]; then
     exit 1
 fi
 
-for _f in "$SDL32" "$SDL64"; do
+for _f in "$SDL32" "$SDL64" "$SHIM32" "$SHIM64"; do
     if [[ ! -f "$_f" ]]; then
-        echo "vader5-driver wrapper: patched SDL not found: $_f" >&2
+        echo "vader5-driver wrapper: patched SDL/shim not found: $_f" >&2
         echo "  Re-run: bash scripts/install.sh" >&2
         exit 1
     fi
@@ -526,6 +613,8 @@ exec "$BWRAP" \
     --proc /proc \
     --bind "$SDL32" "$STEAM32" \
     --bind "$SDL64" "$STEAM64" \
+    --bind "$SHIM32" "$STEAM_SHIM32" \
+    --bind "$SHIM64" "$STEAM_SHIM64" \
     -- "$STEAM_LAUNCHER" "$@"
 WRAPPER_EOF
 

@@ -10,7 +10,7 @@ index a4958f6..0000000 100644
  #define FLYDIGI_V2_INPUT_REPORT         0xEF
  
  typedef struct
-@@ -358,6 +359,32 @@ static bool HIDAPI_DriverFlydigi_InitControllerV1(SDL_HIDAPI_Device *device)
+@@ -358,6 +359,33 @@ static bool HIDAPI_DriverFlydigi_InitControllerV1(SDL_HIDAPI_Device *device)
      return true;
  }
  
@@ -44,7 +44,7 @@ index a4958f6..0000000 100644
  static bool GetReply(SDL_HIDAPI_Device* device, Uint8 command, Uint8* data, size_t length)
  {
      for (int i = 0; i < 100; ++i) {
-@@ -374,10 +401,16 @@ static bool GetReply(SDL_HIDAPI_Device* device, Uint8 command, Uint8* data, size
+@@ -374,10 +402,14 @@ static bool GetReply(SDL_HIDAPI_Device* device, Uint8 command, Uint8* data, size
  #ifdef DEBUG_FLYDIGI_PROTOCOL
          HIDAPI_DumpPacket("Flydigi packet: size = %d", data, size);
  #endif
@@ -63,7 +63,7 @@ index a4958f6..0000000 100644
                  SDL_memmove(&data[0], &data[1], size - 1);
                  data[size - 1] = 0;
              }
-@@ -399,7 +432,7 @@ static bool SDL_HIDAPI_Flydigi_SendInfoRequest(SDL_HIDAPI_Device *device)
+@@ -399,7 +431,7 @@ static bool SDL_HIDAPI_Flydigi_SendInfoRequest(SDL_HIDAPI_Device *device)
          2,
          0
      };
@@ -72,7 +72,7 @@ index a4958f6..0000000 100644
          return SDL_SetError("Couldn't query controller info");
      }
      return true;
-@@ -441,7 +474,7 @@ static bool SDL_HIDAPI_Flydigi_SendStatusRequest(SDL_HIDAPI_Device *device)
+@@ -441,7 +473,7 @@ static bool SDL_HIDAPI_Flydigi_SendStatusRequest(SDL_HIDAPI_Device *device)
          FLYDIGI_V2_MAGIC2,
          FLYDIGI_V2_GET_STATUS_COMMAND
      };
@@ -81,7 +81,7 @@ index a4958f6..0000000 100644
          return SDL_SetError("Couldn't query controller status");
      }
      return true;
-@@ -469,7 +502,7 @@ static bool SDL_HIDAPI_Flydigi_SendAcquireRequest(SDL_HIDAPI_Device *device, boo
+@@ -469,8 +501,8 @@ static bool SDL_HIDAPI_Flydigi_SendAcquireRequest(SDL_HIDAPI_Device *device, boo
          acquire ? 1 : 0,
          'S', 'D', 'L', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
      };
@@ -92,7 +92,7 @@ index a4958f6..0000000 100644
          return SDL_SetError("Couldn't send acquire command");
      }
      return true;
-@@ -613,7 +646,14 @@ static bool HIDAPI_DriverFlydigi_RumbleJoystick(SDL_HIDAPI_Device *device, SDL_J
+@@ -613,8 +645,14 @@ static bool HIDAPI_DriverFlydigi_RumbleJoystick(SDL_HIDAPI_Device *device, SDL_J
          Uint8 rumble_packet[] = { FLYDIGI_V2_CMD_REPORT_ID, FLYDIGI_V2_MAGIC1, FLYDIGI_V2_MAGIC2, FLYDIGI_V2_HAPTIC_COMMAND, 6, 0, 0, 0, 0, 0 };
          rumble_packet[5] = low_frequency_rumble >> 8;
          rumble_packet[6] = high_frequency_rumble >> 8;
