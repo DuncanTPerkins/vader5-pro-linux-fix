@@ -1,5 +1,4 @@
 diff --git a/src/joystick/hidapi/SDL_hidapi_flydigi.c b/src/joystick/hidapi/SDL_hidapi_flydigi.c
-index a4958f6..0000000 100644
 --- a/src/joystick/hidapi/SDL_hidapi_flydigi.c
 +++ b/src/joystick/hidapi/SDL_hidapi_flydigi.c
 @@ -78,6 +78,7 @@ enum
